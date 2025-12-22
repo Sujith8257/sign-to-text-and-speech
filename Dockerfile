@@ -2,7 +2,7 @@
 # Optimized for OpenCV, MediaPipe, and TensorFlow
 
 # Stage 1: Build stage (for any compilation if needed)
-FROM python:3.10-slim as builder
+FROM python:3.10-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -22,8 +22,9 @@ ENV PYTHONUNBUFFERED=1 \
     TF_ENABLE_ONEDNN_OPTS=0
 
 # Install system dependencies required for OpenCV, MediaPipe, and TensorFlow
+# Note: libgl1-mesa-glx is replaced with libgl1 in Debian Trixie and newer
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \

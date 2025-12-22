@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Documentation
+*.md
+!README.md
+
+# Dataset (too large, mount as volume if needed)
+Indian/
+*.jpg
+*.png
+!dataset_classes_visualization.png
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.old
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Training artifacts (keep models, exclude logs)
+checkpoints/logs_*/
+checkpoints/training_history_*.png
+
+# Cleanup scripts
+cleanup_*.py
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Test files
+test_*.py
+*_test.py
+tests/
