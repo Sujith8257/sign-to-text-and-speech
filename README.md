@@ -20,9 +20,12 @@ The system recognizes **35 Indian Sign Language classes** covering digits (1-9) 
 - [Architecture](#architecture)
 - [System Requirements](#system-requirements)
 - [Installation](#installation)
+  - [Option 1: Docker Installation](#option-1-docker-installation-recommended)
+  - [Option 2: Manual Installation](#option-2-manual-installation)
 - [Dataset](#dataset)
 - [Model Architecture](#model-architecture)
 - [Usage](#usage)
+- [Docker Deployment](#docker-deployment)
 - [Project Structure](#project-structure)
 - [API Documentation](#api-documentation)
 - [Training](#training)
@@ -205,14 +208,98 @@ Frontend Display
 
 ## 📦 Installation
 
-### Step 1: Clone the Repository
+### Option 1: Docker Installation (Recommended)
+
+The easiest way to run the application is using Docker, which handles all dependencies automatically.
+
+#### Prerequisites
+- [Docker](https://www.docker.com/get-started) installed on your system
+- Docker Compose (included with Docker Desktop)
+
+#### Quick Start with Docker
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/Sujith8257/sign-to-text-and-speech.git
+   cd sign-to-text-and-speech
+   ```
+
+2. **Build and run with Docker Compose:**
+   ```bash
+   docker-compose up --build
+   ```
+
+3. **Access the application:**
+   Open your browser and navigate to:
+   ```
+   http://localhost:5000
+   ```
+
+#### Docker Commands
+
+**Build the image:**
+```bash
+docker build -t sign-to-text-speech .
+```
+
+**Run the container:**
+```bash
+docker run -d -p 5000:5000 --name signapp sign-to-text-speech
+```
+
+**Run with webcam access (Linux only):**
+```bash
+docker run --device /dev/video0:/dev/video0 \
+  -p 5000:5000 \
+  --name signapp \
+  sign-to-text-speech
+```
+
+**View logs:**
+```bash
+docker logs -f signapp
+```
+
+**Stop the container:**
+```bash
+docker stop signapp
+docker rm signapp
+```
+
+#### GPU Support (Optional)
+
+If you have an NVIDIA GPU and want GPU acceleration:
+
+1. **Install NVIDIA Container Toolkit:**
+   ```bash
+   # Ubuntu/Debian
+   distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+   curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
+   curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | sudo tee /etc/apt/sources.list.d/nvidia-docker.list
+   sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+   sudo systemctl restart docker
+   ```
+
+2. **Build GPU-enabled image:**
+   ```bash
+   docker build -f Dockerfile.gpu -t sign-to-text-speech:gpu .
+   ```
+
+3. **Run with GPU:**
+   ```bash
+   docker run --gpus all -d -p 5000:5000 --name signapp-gpu sign-to-text-speech:gpu
+   ```
+
+### Option 2: Manual Installation
+
+#### Step 1: Clone the Repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/Sujith8257/sign-to-text-and-speech.git
 cd sign-to-text-and-speech
 ```
 
-### Step 2: Create Virtual Environment
+#### Step 2: Create Virtual Environment
 
 **Windows:**
 ```bash
@@ -226,13 +313,13 @@ python3 -m venv venv
 source venv/bin/activate
 ```
 
-### Step 3: Install Dependencies
+#### Step 3: Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Step 4: Verify Installation
+#### Step 4: Verify Installation
 
 ```bash
 python -c "import cv2, mediapipe, flask, tensorflow; print('All dependencies installed successfully!')"
@@ -371,6 +458,87 @@ Currently, the application runs with default settings. Future versions may inclu
 - Model path specification
 - Debug mode
 
+## 🐳 Docker Deployment
+
+### Docker Files Overview
+
+The project includes comprehensive Docker support:
+
+- **`Dockerfile`**: Standard CPU-based Docker image
+- **`Dockerfile.gpu`**: GPU-enabled Docker image (requires NVIDIA Container Toolkit)
+- **`docker-compose.yml`**: Docker Compose configuration for easy deployment
+- **`.dockerignore`**: Excludes unnecessary files from Docker build
+
+### Docker Compose Features
+
+The `docker-compose.yml` includes:
+- Automatic port mapping (5000:5000)
+- Volume mounts for models and templates (easy updates without rebuild)
+- Health checks
+- Restart policies
+- Environment variable configuration
+
+### Updating Models Without Rebuilding
+
+Since models are mounted as volumes, you can update them without rebuilding:
+
+```bash
+# Replace model files
+cp new_model.p model.p
+cp new_model.h5 indian_sign_model.h5
+
+# Restart container
+docker-compose restart
+```
+
+### Production Deployment
+
+For production deployment:
+
+1. **Use environment variables:**
+   ```yaml
+   environment:
+     - FLASK_ENV=production
+     - SECRET_KEY=your-secret-key-here
+   ```
+
+2. **Use reverse proxy (nginx):**
+   ```nginx
+   server {
+       listen 80;
+       server_name your-domain.com;
+       
+       location / {
+           proxy_pass http://localhost:5000;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+       }
+   }
+   ```
+
+3. **Enable HTTPS:** Use Let's Encrypt with Certbot
+
+### Troubleshooting Docker
+
+**Issue: Container exits immediately**
+```bash
+# Check logs
+docker logs signapp
+
+# Run interactively to debug
+docker run -it --rm sign-to-text-speech /bin/bash
+```
+
+**Issue: Webcam not working**
+- Linux: Use `--device /dev/video0:/dev/video0`
+- Windows/Mac: Webcam access in Docker is limited; consider using the host network mode
+
+**Issue: Out of memory**
+```bash
+# Increase Docker memory limit in Docker Desktop settings
+# Or use smaller batch sizes in the application
+```
+
 ## 📁 Project Structure
 
 ```
@@ -407,6 +575,11 @@ sign-to-text-and-speech/
 │   └── index.html                 # Main web interface
 │
 ├── dataset_classes_visualization.png  # Dataset visualization
+│
+├── Dockerfile                      # Docker configuration (CPU)
+├── Dockerfile.gpu                  # Docker configuration (GPU)
+├── docker-compose.yml              # Docker Compose configuration
+├── .dockerignore                   # Docker ignore file
 │
 └── README.md                       # This file
 ```
