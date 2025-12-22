@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <title>SignSpeak - Real-time Sign Language Recognition</title>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <meta content="Real-time Sign Language Recognition and Text-to-Speech Conversion" name="description" />
+
+    <!-- Google Web Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet" />
+
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --primary-dark: #1e40af;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --danger-color: #ef4444;
+            --bg-light: #f8fafc;
+            --text-dark: #1e293b;
+            --text-light: #64748b;
+            --border-color: #e2e8f0;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', 'Poppins', sans-serif;
+            background: var(--bg-light);
+            color: var(--text-dark);
+            overflow-x: hidden;
+        }
+
+        /* Header */
+        .app-header {
+            background: white;
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 0;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+
+        .logo-section {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .status-badge {
+            background: var(--success-color);
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .status-badge.offline {
+            background: var(--danger-color);
+        }
+
+        /* Main Container */
+        .main-wrapper {
+            display: flex;
+            min-height: calc(100vh - 80px);
+            gap: 0;
+        }
+
+        /* Left Panel - Video */
+        .video-panel {
+            flex: 1;
+            background: white;
+            padding: 2rem;
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .live-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 600;
+            color: var(--text-dark);
+        }
+
+        .live-dot {
+            width: 10px;
+            height: 10px;
+            background: var(--success-color);
+            border-radius: 50%;
+            animation: pulse-dot 2s infinite;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.2); }
+        }
+
+        /* DSLR Camera Frame Style */
+        .camera-frame-container {
+            position: relative;
+            background: #1a1a1a;
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 
+                inset 0 0 0 2px #2d2d2d,
+                0 10px 40px rgba(0, 0, 0, 0.3);
+            margin-bottom: 1.5rem;
+        }
+
+        .camera-frame {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 4/3;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 3px solid #333;
+        }
+
+        .camera-frame img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .camera-controls-overlay {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .camera-control-btn {
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            border: none;
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .camera-control-btn:hover {
+            background: rgba(0, 0, 0, 0.8);
+        }
+
+        .hand-tracking-status {
+            background: linear-gradient(135deg, var(--success-color), #059669);
+            color: white;
+            padding: 0.75rem 1rem;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+        }
+
+        .hand-tracking-status.active {
+            background: linear-gradient(135deg, var(--success-color), #059669);
+        }
+
+        .practice-mode-btn {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .practice-mode-btn:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+        }
+
+        .lighting-warning {
+            background: #fef3c7;
+            border-left: 4px solid var(--warning-color);
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 1rem;
+            font-size: 0.875rem;
+        }
+
+        .lighting-warning.hidden {
+            display: none;
+        }
+
+        /* Right Panel - Text Output */
+        .text-panel {
+            flex: 1;
+            background: white;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .panel-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 2px solid var(--border-color);
+        }
+
+        .tab-btn {
+            background: none;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            font-weight: 600;
+            color: var(--text-light);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
+        }
+
+        .tab-btn.active {
+            color: var(--primary-color);
+            border-bottom-color: var(--primary-color);
+        }
+
+        .panel-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .language-select {
+            padding: 0.5rem 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: white;
+            font-size: 0.875rem;
+            cursor: pointer;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .control-btn {
+            background: none;
+            border: none;
+            color: var(--text-light);
+            font-size: 1.25rem;
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+
+        .control-btn:hover {
+            background: var(--bg-light);
+            color: var(--primary-color);
+        }
+
+        .speed-select {
+            padding: 0.25rem 0.5rem;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 0.75rem;
+            background: white;
+        }
+
+        /* Recognized Text Section */
+        .recognized-text-section {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .text-timestamp {
+            font-size: 0.75rem;
+            color: var(--text-light);
+            margin-bottom: 1rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Paragraph Style for Recognized Text */
+        .recognized-paragraph {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 12px;
+            height: 300px;
+            font-size: 1.125rem;
+            line-height: 1.8;
+            color: var(--text-dark);
+            border: 1px solid var(--border-color);
+            overflow-y: auto;
+        }
+
+        .recognized-paragraph.empty {
+            color: var(--text-light);
+            font-style: italic;
+        }
+
+        .confidence-meter {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: var(--bg-light);
+            border-radius: 12px;
+        }
+
+        .confidence-meter-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+
+        .confidence-bar {
+            height: 8px;
+            background: var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--success-color), #059669);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+
+        .confidence-hint {
+            font-size: 0.75rem;
+            color: var(--text-light);
+            margin-top: 0.5rem;
+        }
+
+        /* Action Buttons */
+        .action-buttons {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1.5rem;
+        }
+
+        .btn-speak-all {
+            flex: 1;
+            background: var(--success-color);
+            color: white;
+            border: none;
+            padding: 1rem 2rem;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            transition: all 0.2s;
+        }
+
+        .btn-speak-all:hover {
+            background: #059669;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-pause {
+            background: white;
+            border: 2px solid var(--border-color);
+            color: var(--text-dark);
+            padding: 1rem;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-pause:hover {
+            border-color: var(--primary-color);
+            color: var(--primary-color);
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .main-wrapper {
+                flex-direction: column;
+            }
+
+            .video-panel,
+            .text-panel {
+                border-right: none;
+                border-bottom: 1px solid var(--border-color);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .panel-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 1rem;
+            }
+
+            .action-buttons {
+                flex-direction: column;
+            }
+
+            .btn-speak-all {
+                width: 100%;
+            }
+        }
+
+        /* Loading State */
+        .video-loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: white;
+            z-index: 10;
+        }
+
+        .video-loading i {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            color: var(--primary-color);
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Header -->
+    <header class="app-header">
+        <div class="container-fluid px-4">
+            <div class="d-flex justify-content-between align-items-center">
+                <div class="logo-section">
+                    <div class="logo">
+                        <i class="fas fa-hands"></i>
+                        <span>SignSpeak</span>
+                    </div>
+                    <span class="status-badge" id="statusBadge">
+                        <i class="fas fa-circle"></i>
+                        <span id="statusText">Active</span>
+                    </span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Wrapper -->
+    <div class="main-wrapper">
+        <!-- Left Panel - Video -->
+        <div class="video-panel">
+            <div class="panel-header">
+                <div class="live-indicator">
+                    <span class="live-dot"></span>
+                    <span>Live Detection</span>
+                </div>
+            </div>
+
+            <div class="camera-frame-container">
+                <div class="camera-frame">
+                    <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Video Feed" 
+                         onerror="handleVideoError()" />
+                    <div id="videoLoading" class="video-loading" style="display: none;">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        <p>Initializing camera...</p>
+                    </div>
+                    <div class="camera-controls-overlay">
+                        <button class="camera-control-btn" title="Fullscreen" onclick="toggleFullscreen()">
+                            <i class="fas fa-expand"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="hand-tracking-status active" id="handTrackingStatus">
+                <div>
+                    <i class="fas fa-hand-paper"></i>
+                    <span>Hand Tracking Active</span>
+                </div>
+                <div style="font-size: 0.875rem; opacity: 0.9;">
+                    Keep hands within the central frame for best accuracy
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 1rem; align-items: center;">
+                <button class="practice-mode-btn">
+                    <i class="fas fa-graduation-cap"></i>
+                    Practice Mode
+                </button>
+            </div>
+
+            <div class="lighting-warning hidden" id="lightingWarning">
+                <div>
+                    <i class="fas fa-lightbulb"></i>
+                    <span>Lighting is slightly low. Consider adding a light source.</span>
+                </div>
+                <button onclick="document.getElementById('lightingWarning').classList.add('hidden')" 
+                        style="background: none; border: none; color: var(--warning-color); cursor: pointer;">
+                    Dismiss
+                </button>
+            </div>
+        </div>
+
+        <!-- Right Panel - Text Output -->
+        <div class="text-panel">
+            <div class="panel-tabs">
+                <button class="tab-btn active" onclick="switchTab('live')">Live</button>
+                <button class="tab-btn" onclick="switchTab('manual')">Manual</button>
+            </div>
+
+            <div class="panel-controls">
+                <select class="language-select" id="languageSelect">
+                    <option value="en">Sign Language → English</option>
+                </select>
+                <div class="control-group">
+                    <button class="control-btn" title="Volume">
+                        <i class="fas fa-volume-up"></i>
+                    </button>
+                    <select class="speed-select" id="speedSelect">
+                        <option>1.0x</option>
+                        <option>0.75x</option>
+                        <option>0.5x</option>
+                        <option>1.25x</option>
+                        <option>1.5x</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="recognized-text-section" id="recognizedTextSection">
+                <div class="text-timestamp" id="currentTimestamp"></div>
+                <div class="recognized-paragraph empty" id="recognizedParagraph">
+                    Translated text will appear here as you make sign language gestures...
+                </div>
+            </div>
+
+            <div class="confidence-meter">
+                <div class="confidence-meter-label">
+                    <span>Confidence</span>
+                    <span id="confidenceLevel">Good</span>
+                </div>
+                <div class="confidence-bar">
+                    <div class="confidence-fill" id="confidenceFill" style="width: 85%"></div>
+                </div>
+                <div class="confidence-hint">
+                    Try to keep your palms visible to the camera
+                </div>
+            </div>
+
+            <div class="action-buttons">
+                <button class="btn-speak-all" id="speakAllButton">
+                    <i class="fas fa-volume-up"></i>
+                    Speak All
+                </button>
+                <button class="btn-pause" id="pauseButton">
+                    <i class="fas fa-pause"></i>
+                </button>
+                <button class="btn-pause" id="clearButton" title="Clear Text" style="margin-left: 0.5rem;">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Socket.IO -->
+    <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
+    
+    <script>
+        const socket = io();
+        let recognizedTexts = [];
+        let currentConfidence = 85;
+        let paragraphText = '';
+
+        // Update timestamp
+        function updateTimestamp() {
+            const now = new Date();
+            const options = { weekday: 'long', hour: 'numeric', minute: '2-digit', hour12: true };
+            const timeStr = now.toLocaleDateString('en-US', options).toUpperCase();
+            document.getElementById('currentTimestamp').textContent = timeStr;
+        }
+        updateTimestamp();
+        setInterval(updateTimestamp, 60000);
+
+        // Tab switching
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+        }
+
+        // Fullscreen toggle
+        function toggleFullscreen() {
+            const videoFrame = document.querySelector('.camera-frame');
+            if (!document.fullscreenElement) {
+                videoFrame.requestFullscreen();
+                } else {
+                document.exitFullscreen();
+            }
+        }
+
+        // Check model status
+        async function checkStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                const badge = document.getElementById('statusBadge');
+                const text = document.getElementById('statusText');
+                
+                if (data.skeleton_model || data.cnn_model) {
+                    badge.classList.remove('offline');
+                    text.textContent = 'Active';
+                } else {
+                    badge.classList.add('offline');
+                    text.textContent = 'No Models';
+                }
+            } catch (error) {
+                console.error('Error checking status:', error);
+            }
+        }
+        checkStatus();
+
+        // Video feed handling
+        const videoFeed = document.getElementById('videoFeed');
+        const videoLoading = document.getElementById('videoLoading');
+
+        function handleVideoError() {
+            videoLoading.style.display = 'block';
+            videoLoading.innerHTML = '<i class="fas fa-exclamation-triangle"></i><p>Camera not available</p>';
+        }
+
+        videoFeed.onload = function() {
+            videoLoading.style.display = 'none';
+        };
+
+        videoFeed.onerror = handleVideoError;
+
+        // Socket.IO - Receive predictions
+        socket.on('prediction', function (data) {
+            const text = data.text;
+            const confidence = Math.round((data.confidence || 0.85) * 100);
+            const isWord = data.is_word || false;
+            
+            // Update confidence meter
+            currentConfidence = confidence;
+            updateConfidenceMeter(confidence);
+
+            // Add recognized text
+            if (text && text.trim()) {
+                addRecognizedText(text, confidence, isWord);
+            }
+        });
+
+        // Add recognized text to paragraph
+        function addRecognizedText(text, confidence, isWord = true) {
+            // Store for history
+            recognizedTexts.push({
+                text: text,
+                confidence: confidence,
+                timestamp: new Date(),
+                isWord: isWord
+            });
+
+            // Keep only last 50 items for history
+            if (recognizedTexts.length > 50) {
+                recognizedTexts.shift();
+            }
+
+            // Add to paragraph text
+            const paragraphElement = document.getElementById('recognizedParagraph');
+            
+            // Remove empty state class
+            paragraphElement.classList.remove('empty');
+            
+            // Get the last word in the paragraph
+            const words = paragraphText.trim().split(/\s+/);
+            const lastWord = words.length > 0 ? words[words.length - 1] : '';
+            
+            // Check if this is the same word (avoid duplicates)
+            if (lastWord && lastWord.toLowerCase() === text.toLowerCase()) {
+                return;
+            }
+            
+            // Check if text ends with punctuation
+            const endsWithPunctuation = /[.!?,;:]$/.test(text);
+            
+            // Add space if paragraph already has text
+            if (paragraphText.trim() && !text.match(/^[.!?,;:]/)) {
+                if (!paragraphText.trim().match(/[.!?,;:]$/)) {
+                    paragraphText += ' ';
+                }
+            }
+            
+            // Add the complete word
+            paragraphText += text;
+            
+            // Add period if it's a complete phrase
+            const completePhrases = ['Hello', 'Thank You', 'Done', 'Sorry', 'Please', 'You are welcome.'];
+            if (completePhrases.includes(text) && !endsWithPunctuation) {
+                paragraphText += '.';
+            }
+            
+            // Update the paragraph display
+            paragraphElement.textContent = paragraphText;
+            
+            // Auto-scroll to bottom
+            paragraphElement.scrollTop = paragraphElement.scrollHeight;
+        }
+
+        // Clear paragraph text
+        function clearParagraph() {
+            paragraphText = '';
+            const paragraphElement = document.getElementById('recognizedParagraph');
+            paragraphElement.textContent = 'Translated text will appear here as you make sign language gestures...';
+            paragraphElement.classList.add('empty');
+        }
+
+        // Update confidence meter
+        function updateConfidenceMeter(confidence) {
+            const fill = document.getElementById('confidenceFill');
+            const level = document.getElementById('confidenceLevel');
+            
+            fill.style.width = confidence + '%';
+            
+            if (confidence >= 85) {
+                fill.style.background = 'linear-gradient(90deg, var(--success-color), #059669)';
+                level.textContent = 'Excellent';
+            } else if (confidence >= 70) {
+                fill.style.background = 'linear-gradient(90deg, var(--warning-color), #d97706)';
+                level.textContent = 'Good';
+            } else {
+                fill.style.background = 'linear-gradient(90deg, var(--danger-color), #dc2626)';
+                level.textContent = 'Fair';
+            }
+        }
+
+        // Speak All button
+        document.getElementById('speakAllButton').addEventListener('click', function() {
+            const allText = paragraphText.trim();
+            
+            if (!allText || allText === 'Translated text will appear here as you make sign language gestures...') {
+                alert('No text to speak. Please make some signs first.');
+                return;
+            }
+            
+            speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(allText);
+            utterance.rate = parseFloat(document.getElementById('speedSelect').value);
+            utterance.pitch = 1.0;
+            utterance.volume = 1.0;
+            
+            const voices = speechSynthesis.getVoices();
+            const preferredVoice = voices.find(voice => 
+                voice.name.includes('English') && 
+                (voice.name.includes('Female') || voice.name.includes('US'))
+            ) || voices.find(voice => voice.lang.startsWith('en')) || voices[0];
+            
+            if (preferredVoice) {
+                utterance.voice = preferredVoice;
+            }
+            
+            speechSynthesis.speak(utterance);
+        });
+
+        // Pause button
+        document.getElementById('pauseButton').addEventListener('click', function() {
+            if (speechSynthesis.speaking) {
+                speechSynthesis.pause();
+                this.innerHTML = '<i class="fas fa-play"></i>';
+            } else if (speechSynthesis.paused) {
+                speechSynthesis.resume();
+                this.innerHTML = '<i class="fas fa-pause"></i>';
+            }
+        });
+
+        // Clear button
+        document.getElementById('clearButton').addEventListener('click', function() {
+            if (confirm('Clear all recognized text?')) {
+                clearParagraph();
+            }
+        });
+
+        // Load voices
+        if (speechSynthesis.onvoiceschanged !== undefined) {
+            speechSynthesis.onvoiceschanged = () => {};
+        }
+    </script>
+
+</body>
+
+</html>
