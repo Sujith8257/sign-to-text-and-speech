@@ -1,0 +1,67 @@
+# GPU-enabled Dockerfile for Sign Language Recognition System
+# Requires NVIDIA Container Toolkit
+# Usage: docker build -f Dockerfile.gpu -t sign-to-text-speech:gpu .
+
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    TF_CPP_MIN_LOG_LEVEL=3 \
+    TF_ENABLE_ONEDNN_OPTS=0 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+# Install Python and system dependencies
+# Note: libgl1-mesa-glx is replaced with libgl1 in newer Debian/Ubuntu versions
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3.10-dev \
+    python3-pip \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgthread-2.0-0 \
+    ffmpeg \
+    libgstreamer1.0-0 \
+    libgstreamer-plugins-base1.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create symlink for python
+RUN ln -s /usr/bin/python3.10 /usr/bin/python
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements first (for better caching)
+COPY requirements.txt .
+
+# Upgrade pip and install Python dependencies
+# Note: tensorflow-gpu is included in tensorflow>=2.13.0
+RUN pip3 install --upgrade pip setuptools wheel && \
+    pip3 install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY app.py .
+COPY templates/ ./templates/
+COPY model.p .
+COPY indian_sign_model.h5 .
+COPY indian_sign_weights.h5 .
+COPY checkpoints/ ./checkpoints/
+
+# Create directory for dataset
+RUN mkdir -p Indian
+
+# Expose Flask default port
+EXPOSE 5000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/status')" || exit 1
+
+# Run the application
+CMD ["python3", "app.py"]
