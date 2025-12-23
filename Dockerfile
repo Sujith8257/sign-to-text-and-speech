@@ -50,7 +50,7 @@ RUN pip install --upgrade pip setuptools wheel && \
 COPY app.py .
 COPY templates/ ./templates/
 COPY model.p .
-COPY indian_sign_model.h5 .
+COPY indian_sign_model.h5 ./model.h5
 COPY indian_sign_weights.h5 .
 COPY checkpoints/ ./checkpoints/
 

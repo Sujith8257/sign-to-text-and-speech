@@ -76,8 +76,39 @@ keras_model = None
 if TENSORFLOW_AVAILABLE:
     try:
         if os.path.exists(KERAS_MODEL_PATH):
-            keras_model = keras.models.load_model(KERAS_MODEL_PATH)
-            print("✔ Keras landmark model (model.h5) loaded successfully")
+            # Try loading with compile=False first to avoid compilation issues
+            try:
+                keras_model = keras.models.load_model(KERAS_MODEL_PATH, compile=False)
+                print("✔ Keras landmark model (model.h5) loaded successfully")
+            except Exception as load_error:
+                # Handle version compatibility issues with DepthwiseConv2D groups parameter
+                if 'groups' in str(load_error) or 'DepthwiseConv2D' in str(load_error):
+                    try:
+                        # Create a custom DepthwiseConv2D that ignores the groups parameter
+                        from tensorflow.keras.layers import DepthwiseConv2D as BaseDepthwiseConv2D
+                        
+                        class CompatibleDepthwiseConv2D(BaseDepthwiseConv2D):
+                            def __init__(self, *args, **kwargs):
+                                # Remove 'groups' parameter if present (not supported in older TF versions)
+                                kwargs.pop('groups', None)
+                                super().__init__(*args, **kwargs)
+                        
+                        # Try loading with the custom object
+                        keras_model = keras.models.load_model(
+                            KERAS_MODEL_PATH, 
+                            compile=False,
+                            custom_objects={'DepthwiseConv2D': CompatibleDepthwiseConv2D}
+                        )
+                        print("✔ Keras landmark model (model.h5) loaded successfully (with compatibility fix)")
+                    except Exception as e2:
+                        print(f"⚠ Keras model loading failed: {e2}")
+                        print("   The model may have been saved with a different TensorFlow version.")
+                        print("   Continuing without Keras model - skeleton model will be used.")
+                        keras_model = None
+                else:
+                    print(f"⚠ Keras model loading failed: {load_error}")
+                    print("   Continuing without Keras model - skeleton model will be used.")
+                    keras_model = None
         else:
             print(f"⚠ Keras model not found at {KERAS_MODEL_PATH}")
     except Exception as e:
@@ -424,4 +455,4 @@ if __name__ == '__main__':
     print(f"TensorFlow/Keras: {'✔ Available' if TENSORFLOW_AVAILABLE else '❌ Not Installed'}")
     print("="*50 + "\n")
     
-    socketio.run(app, debug=True)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
