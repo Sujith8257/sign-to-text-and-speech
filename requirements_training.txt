@@ -1,0 +1,11 @@
+# Additional dependencies for training the ISL model
+# Install base requirements first: pip install -r requirements.txt
+# Then install training requirements: pip install -r requirements_training.txt
+
+# All base requirements are included here for convenience
+-r requirements.txt
+
+# Additional training-specific dependencies
+# (Currently all training dependencies are in base requirements.txt)
+# Add any training-specific packages here if needed in the future
+

@@ -1,0 +1,34 @@
+services:
+  signapp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sign-language-app
+    ports:
+      - "5000:5000"
+    volumes:
+      # Mount models for easy updates without rebuilding
+      - ./model:/app/model:ro
+      - ./checkpoints:/app/checkpoints:ro
+      # Mount templates for easy updates
+      - ./templates:/app/templates:ro
+      # Mount app.py for easy updates during development
+      - ./app.py:/app/app.py:ro
+      # Mount database CSV for persistence
+      - ./database.csv:/app/database.csv
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+      - TF_CPP_MIN_LOG_LEVEL=3
+    restart: unless-stopped
+    # For webcam access on Linux (uncomment if needed)
+    # devices:
+    #   - /dev/video0:/dev/video0
+    # For webcam access, you may also need:
+    # privileged: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/status')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

@@ -88,6 +88,42 @@
             background: var(--danger-color);
         }
 
+        .user-section {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-dark);
+            font-weight: 500;
+        }
+
+        .btn-logout {
+            padding: 0.5rem 1rem;
+            background: var(--danger-color);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 0.875rem;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: all 0.3s;
+        }
+
+        .btn-logout:hover {
+            background: #dc2626;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
         /* Main Container */
         .main-wrapper {
             display: flex;
@@ -498,6 +534,16 @@
                         <span id="statusText">Active</span>
                     </span>
                 </div>
+                <div class="user-section">
+                    <div class="user-info">
+                        <i class="fas fa-user"></i>
+                        <span>{% if username %}{{ username }}{% else %}User{% endif %}</span>
+                    </div>
+                    <a href="{{ url_for('logout') }}" class="btn-logout">
+                        <i class="fas fa-sign-out-alt"></i>
+                        Logout
+                    </a>
+                </div>
             </div>
         </div>
     </header>
@@ -539,13 +585,6 @@
                 </div>
             </div>
 
-            <div style="display: flex; gap: 1rem; align-items: center;">
-                <button class="practice-mode-btn">
-                    <i class="fas fa-graduation-cap"></i>
-                    Practice Mode
-                </button>
-            </div>
-
             <div class="lighting-warning hidden" id="lightingWarning">
                 <div>
                     <i class="fas fa-lightbulb"></i>
@@ -562,7 +601,6 @@
         <div class="text-panel">
             <div class="panel-tabs">
                 <button class="tab-btn active" onclick="switchTab('live')">Live</button>
-                <button class="tab-btn" onclick="switchTab('manual')">Manual</button>
             </div>
 
             <div class="panel-controls">

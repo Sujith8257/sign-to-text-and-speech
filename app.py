@@ -9,6 +9,7 @@ import platform
 import copy
 import itertools
 import string
+import time
 
 import cv2
 import pickle
@@ -16,8 +17,11 @@ import mediapipe as mp
 import numpy as np
 import pandas as pd
 from tensorflow import keras
+import hashlib
+import csv
+from functools import wraps
 
-from flask import Flask, render_template, Response, request, jsonify
+from flask import Flask, render_template, Response, request, jsonify, session, redirect, url_for, flash
 from flask_socketio import SocketIO, emit
 
 # -----------------------------
@@ -51,106 +55,233 @@ app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # -----------------------------
+#   AUTHENTICATION SETUP
+# -----------------------------
+DATABASE_CSV = 'database.csv'
+
+def init_database():
+    """Initialize the CSV database if it doesn't exist."""
+    if not os.path.exists(DATABASE_CSV):
+        with open(DATABASE_CSV, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['username', 'password_hash', 'email'])
+
+def hash_password(password):
+    """Hash a password using SHA256."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def register_user(username, password, email=''):
+    """Register a new user in the CSV database."""
+    init_database()
+    
+    # Check if username already exists
+    if os.path.exists(DATABASE_CSV):
+        df = pd.read_csv(DATABASE_CSV)
+        if username in df['username'].values:
+            return False, "Username already exists"
+    
+    # Add new user
+    password_hash = hash_password(password)
+    new_user = pd.DataFrame({
+        'username': [username],
+        'password_hash': [password_hash],
+        'email': [email]
+    })
+    
+    if os.path.exists(DATABASE_CSV):
+        df = pd.read_csv(DATABASE_CSV)
+        df = pd.concat([df, new_user], ignore_index=True)
+    else:
+        df = new_user
+    
+    df.to_csv(DATABASE_CSV, index=False)
+    return True, "User registered successfully"
+
+def verify_user(username, password):
+    """Verify user credentials."""
+    if not os.path.exists(DATABASE_CSV):
+        return False, "Database not found"
+    
+    df = pd.read_csv(DATABASE_CSV)
+    user = df[df['username'] == username]
+    
+    if user.empty:
+        return False, "Username not found"
+    
+    password_hash = hash_password(password)
+    stored_hash = user['password_hash'].values[0]
+    
+    if password_hash == stored_hash:
+        return True, "Login successful"
+    else:
+        return False, "Incorrect password"
+
+def login_required(f):
+    """Decorator to require login for routes."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'username' not in session:
+            return redirect(url_for('signin'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+# -----------------------------
 #   MODEL PATHS
 # -----------------------------
 SKELETON_MODEL_PATH = './model/model.p'
-# Try multiple possible Keras model file names (prioritize new trained model)
-KERAS_MODEL_PATHS = [
-    r'D:\sign-to-text-and-speech\model\indian_sign_model.h5',  # New trained model (absolute path)
-    './model/indian_sign_model.h5',  # New trained model (relative path)
-    './checkpoints/best_model_20251228_173824.h5',  # Latest checkpoint
-    r'D:\sign-to-text-and-speech\model\indian_sign_weights.h5',  # Legacy weights (fallback)
-    './model/indian_sign_weights.h5'  # Legacy weights (relative fallback)
-]
+KERAS_MODEL_PATH = './model/indian_sign_model.h5'  # Indian sign / landmark-based model
 
 # -----------------------------
-#   LOAD SKELETON MODEL (model.p)
+#   PREDICTION STABILITY CONFIGURATION
+# -----------------------------
+# Stability check: waits for sign to stabilize before predicting
+# This improves accuracy by avoiding predictions while hand is still moving
+PREDICTION_STABILITY_DURATION = 0.8  # seconds - how long same prediction must appear before emitting
+PREDICTION_MIN_CONFIDENCE = 0.6  # minimum confidence threshold (0.0 to 1.0)
+PREDICTION_BUFFER_SIZE = 30  # number of recent predictions to track for stability
+
+# -----------------------------
+#   WORD PREDICTION MODE CONFIGURATION
+# -----------------------------
+WORD_MODE_ENABLED = True  # Enable word prediction mode (accumulates characters into words)
+WORD_PAUSE_DURATION = 1.5  # seconds - pause duration to complete a word
+MAX_WORD_LENGTH = 20  # maximum characters in a word before forcing completion
+
+# -----------------------------
+#   LOAD SKELETON MODEL (model.p) - For skeleton detection only, not used for predictions
 # -----------------------------
 skeleton_model = None
 try:
     model_dict = pickle.load(open(SKELETON_MODEL_PATH, 'rb'))
     skeleton_model = model_dict['model']
-    print("✔ Skeleton model (model.p) loaded successfully")
+    print("✔ Skeleton model (model.p) loaded (for skeleton detection only)")
 except FileNotFoundError:
-    print(f"⚠ ISL Skeleton model not found at {SKELETON_MODEL_PATH}")
+    print(f"⚠ Skeleton model not found at {SKELETON_MODEL_PATH} (optional - not used for predictions)")
 except Exception as e:
-        print(f"❌ Error loading ISL skeleton model: {e}")
+    print(f"⚠ Error loading skeleton model: {e} (optional - not used for predictions)")
 
 # -----------------------------
 #   LOAD KERAS LANDMARK MODEL (.h5)
 # -----------------------------
 keras_model = None
-keras_model_path_used = None
-
 if TENSORFLOW_AVAILABLE:
-    # Try to find and load a Keras model from available paths
-    for model_path in KERAS_MODEL_PATHS:
-        if os.path.exists(model_path):
+    try:
+        if os.path.exists(KERAS_MODEL_PATH):
+            # Try loading with compile=False first to avoid compilation issues
             try:
-                # Try loading with compile=False first to avoid compilation issues
-                try:
-                    keras_model = keras.models.load_model(model_path, compile=False)
-                    keras_model_path_used = model_path
-                    print(f"✔ ISL Keras landmark model ({os.path.basename(model_path)}) loaded successfully")
-                    break
-                except Exception as load_error:
-                    # Handle version compatibility issues with DepthwiseConv2D groups parameter
-                    if 'groups' in str(load_error) or 'DepthwiseConv2D' in str(load_error):
-                        try:
-                            # Create a custom DepthwiseConv2D that ignores the groups parameter
-                            from tensorflow.keras.layers import DepthwiseConv2D as BaseDepthwiseConv2D
-                            
-                            class CompatibleDepthwiseConv2D(BaseDepthwiseConv2D):
-                                def __init__(self, *args, **kwargs):
-                                    # Remove 'groups' parameter if present (not supported in older TF versions)
-                                    kwargs.pop('groups', None)
-                                    super().__init__(*args, **kwargs)
-                            
-                            # Try loading with the custom object
-                            keras_model = keras.models.load_model(
-                                model_path, 
-                                compile=False,
-                                custom_objects={'DepthwiseConv2D': CompatibleDepthwiseConv2D}
-                            )
-                            keras_model_path_used = model_path
-                            print(f"✔ ISL Keras landmark model ({os.path.basename(model_path)}) loaded successfully (with compatibility fix)")
-                            break
-                        except Exception as e2:
-                            print(f"⚠ Failed to load {model_path}: {e2}")
-                            continue
-                    else:
-                        print(f"⚠ Failed to load {model_path}: {load_error}")
-                        continue
-            except Exception as e:
-                print(f"⚠ Error loading {model_path}: {e}")
-                continue
-    
-    if keras_model is None:
-        print("⚠ No ISL Keras model found. Tried the following paths:")
-        for path in KERAS_MODEL_PATHS:
-            exists = "✓" if os.path.exists(path) else "✗"
-            print(f"   {exists} {path}")
-        print("   Continuing without ISL Keras model - ISL skeleton model will be used.")
-else:
-        print("⚠ TensorFlow not available. ISL Keras model cannot be loaded.")
+                keras_model = keras.models.load_model(KERAS_MODEL_PATH, compile=False)
+                print("✔ Keras landmark model (model.h5) loaded successfully")
+            except Exception as load_error:
+                # Handle version compatibility issues with DepthwiseConv2D groups parameter
+                if 'groups' in str(load_error) or 'DepthwiseConv2D' in str(load_error):
+                    try:
+                        # Create a custom DepthwiseConv2D that ignores the groups parameter
+                        from tensorflow.keras.layers import DepthwiseConv2D as BaseDepthwiseConv2D
+                        
+                        class CompatibleDepthwiseConv2D(BaseDepthwiseConv2D):
+                            def __init__(self, *args, **kwargs):
+                                # Remove 'groups' parameter if present (not supported in older TF versions)
+                                kwargs.pop('groups', None)
+                                super().__init__(*args, **kwargs)
+                        
+                        # Try loading with the custom object
+                        keras_model = keras.models.load_model(
+                            KERAS_MODEL_PATH, 
+                            compile=False,
+                            custom_objects={'DepthwiseConv2D': CompatibleDepthwiseConv2D}
+                        )
+                        print("✔ Keras landmark model (model.h5) loaded successfully (with compatibility fix)")
+                    except Exception as e2:
+                        print(f"⚠ Keras model loading failed: {e2}")
+                        print("   The model may have been saved with a different TensorFlow version.")
+                        print("   Predictions will not be available without the Keras model.")
+                        keras_model = None
+                else:
+                    print(f"⚠ Keras model loading failed: {load_error}")
+                    print("   Predictions will not be available without the Keras model.")
+                    keras_model = None
+        else:
+            print(f"⚠ Keras model not found at {KERAS_MODEL_PATH}")
+    except Exception as e:
+        print(f"❌ Error loading Keras model: {e}")
 
 # -----------------------------
 #   LABELS / ALPHABET
 # -----------------------------
-# Labels for ISL skeleton model (scikit-learn) - Indian Sign Language letters (A-Z)
+# Labels for classical skeleton model (scikit-learn) - ASL + phrases
 labels_dict = {
     0: 'A', 1: 'B', 2: 'C', 3: 'D', 4: 'E', 5: 'F', 6: 'G', 7: 'H', 8: 'I', 9: 'J',
     10: 'K', 11: 'L', 12: 'M', 13: 'N', 14: 'O', 15: 'P', 16: 'Q', 17: 'R', 18: 'S',
     19: 'T', 20: 'U', 21: 'V', 22: 'W', 23: 'X', 24: 'Y', 25: 'Z'
 }
 
-# Alphabet for ISL Keras landmark model (digits 1-9 + letters A–Z)
+# Alphabet for Keras landmark model (digits + A–Z)
 keras_alphabet = ['1', '2', '3', '4', '5', '6', '7', '8', '9'] + list(string.ascii_uppercase)
 
 
 @app.route('/')
+@login_required
 def index():
-    return render_template('index.html')
+    return render_template('index.html', username=session.get('username'))
+
+
+@app.route('/signup', methods=['GET', 'POST'])
+def signup():
+    """Sign up page."""
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '').strip()
+        email = request.form.get('email', '').strip()
+        
+        if not username or not password:
+            flash('Username and password are required', 'error')
+            return render_template('signup.html')
+        
+        success, message = register_user(username, password, email)
+        if success:
+            flash(message, 'success')
+            return redirect(url_for('signin'))
+        else:
+            flash(message, 'error')
+            return render_template('signup.html')
+    
+    return render_template('signup.html')
+
+
+@app.route('/signin', methods=['GET', 'POST'])
+def signin():
+    """Sign in page."""
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '').strip()
+        
+        if not username or not password:
+            flash('Username and password are required', 'error')
+            return render_template('signin.html')
+        
+        success, message = verify_user(username, password)
+        if success:
+            session['username'] = username
+            flash(message, 'success')
+            return redirect(url_for('index'))
+        else:
+            flash(message, 'error')
+            return render_template('signin.html')
+    
+    # If already logged in, redirect to home
+    if 'username' in session:
+        return redirect(url_for('index'))
+    
+    return render_template('signin.html')
+
+
+@app.route('/logout')
+def logout():
+    """Logout and clear session."""
+    username = session.pop('username', None)
+    if username:
+        flash(f'Logged out successfully, {username}', 'success')
+    return redirect(url_for('signin'))
 
 
 @app.route('/api/status')
@@ -159,7 +290,22 @@ def get_status():
     return jsonify({
         'skeleton_model': skeleton_model is not None,
         'keras_model': keras_model is not None,
-        'tensorflow': TENSORFLOW_AVAILABLE
+        'tensorflow': TENSORFLOW_AVAILABLE,
+        'word_mode': WORD_MODE_ENABLED
+    })
+
+
+@app.route('/api/toggle-word-mode', methods=['POST'])
+@login_required
+def toggle_word_mode():
+    """Toggle word prediction mode on/off."""
+    global WORD_MODE_ENABLED
+    data = request.get_json()
+    if 'enabled' in data:
+        WORD_MODE_ENABLED = bool(data['enabled'])
+    return jsonify({
+        'word_mode': WORD_MODE_ENABLED,
+        'message': 'Word mode ' + ('enabled' if WORD_MODE_ENABLED else 'disabled')
     })
 
 
@@ -173,22 +319,35 @@ def handle_connect():
 # ----------------------------------------------------
 def open_camera():
     is_windows = platform.system().lower() == "windows"
-    backend = cv2.CAP_DSHOW if is_windows else cv2.CAP_ANY
-
-    print("Trying to open camera at index 0 using backend:", backend)
-
-    cap = cv2.VideoCapture(0, backend)
-
-    if cap.isOpened():
-        ret, frame = cap.read()
-        if ret and frame is not None:
-            print("✔ Camera opened successfully at index 0")
-            return cap
-        else:
-            print("⚠ Camera opened but no frames received.")
-            cap.release()
-
-    print("❌ ERROR: Could not access camera at index 0")
+    
+    # Try different backends based on platform
+    if is_windows:
+        backends_to_try = [cv2.CAP_DSHOW, cv2.CAP_ANY]
+    else:
+        # For Linux/Docker, try V4L2 first, then fallback to ANY
+        backends_to_try = [cv2.CAP_V4L2, cv2.CAP_ANY]
+    
+    for backend in backends_to_try:
+        try:
+            print(f"Trying to open camera at index 0 using backend: {backend}")
+            cap = cv2.VideoCapture(0, backend)
+            
+            if cap.isOpened():
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    print(f"✔ Camera opened successfully at index 0 with backend {backend}")
+                    return cap
+                else:
+                    print(f"⚠ Camera opened with backend {backend} but no frames received.")
+                    cap.release()
+            else:
+                print(f"⚠ Could not open camera with backend {backend}")
+        except Exception as e:
+            print(f"⚠ Error trying backend {backend}: {e}")
+            continue
+    
+    print("❌ ERROR: Could not access camera at index 0 with any backend")
+    print("   Note: In Docker, camera access requires proper device mounting.")
     return None
 
 
@@ -237,19 +396,10 @@ def pre_process_landmark(landmark_list):
 #   PREDICTION FUNCTIONS
 # ----------------------------------------------------
 def predict_with_skeleton_model(data_aux):
-    """Make prediction using ISL skeleton (MediaPipe landmarks) model"""
-    if skeleton_model is None:
-        return None, 0.0
-    
-    try:
-        prediction = skeleton_model.predict([np.asarray(data_aux)])
-        prediction_proba = skeleton_model.predict_proba([np.asarray(data_aux)])
-        confidence = max(prediction_proba[0])
-        predicted_label = labels_dict.get(int(prediction[0]), '?')
-        return predicted_label, float(confidence)
-    except Exception as e:
-        print(f"ISL Skeleton prediction error: {e}")
-        return None, 0.0
+    """(Deprecated) Skeleton model is no longer used for predictions.
+    Only indian_sign_model.h5 (Keras model) is used for predictions.
+    Skeleton detection is handled by MediaPipe for visualization only."""
+    return None, 0.0
 
 
 def predict_with_cnn_model(frame, hand_region=None):
@@ -258,13 +408,28 @@ def predict_with_cnn_model(frame, hand_region=None):
 
 
 def predict_with_keras_landmark_model(pre_processed_landmark_list):
-    """Make prediction using ISL Keras landmark model."""
+    """Make prediction using Keras landmark model (reference logic)."""
     if keras_model is None:
         return None, 0.0
 
     try:
-        df = pd.DataFrame(pre_processed_landmark_list).transpose()
-        predictions = keras_model.predict(df, verbose=0)
+        # Convert to numpy array and ensure correct shape
+        # Model expects (batch_size, 84) - pad to 84 features if needed
+        features = np.array(pre_processed_landmark_list, dtype=np.float32)
+        
+        # Pad to 84 features if we have less (for single hand)
+        if len(features) < 84:
+            # Pad with zeros to reach 84 features (model expects 84 for two-hand support)
+            features = np.pad(features, (0, 84 - len(features)), mode='constant', constant_values=0.0)
+        elif len(features) > 84:
+            # Truncate if somehow we have more
+            features = features[:84]
+        
+        # Reshape to (1, 84) for batch prediction
+        features = features.reshape(1, -1)
+        
+        # Make prediction
+        predictions = keras_model.predict(features, verbose=0)
         predicted_class = int(np.argmax(predictions, axis=1)[0])
         confidence = float(np.max(predictions))
 
@@ -275,33 +440,21 @@ def predict_with_keras_landmark_model(pre_processed_landmark_list):
 
         return label, confidence
     except Exception as e:
-        print(f"ISL Keras landmark model prediction error: {e}")
+        print(f"Keras landmark model prediction error: {e}")
+        import traceback
+        traceback.print_exc()
         return None, 0.0
 
 
 def get_combined_prediction(skeleton_pred, skeleton_conf, keras_pred, keras_conf):
     """
-    Combine predictions from both ISL models.
-    Uses the prediction with higher confidence, or ensemble if both are similar.
+    (Deprecated) No longer combines predictions - only uses Keras model.
+    This function is kept for backward compatibility but is not called.
     """
-    # If only one model has prediction, use that
-    if skeleton_pred is None and keras_pred is not None:
-        return keras_pred, keras_conf, "ISL-Keras"
-    if keras_pred is None and skeleton_pred is not None:
-        return skeleton_pred, skeleton_conf, "ISL-Skeleton"
-    if skeleton_pred is None and keras_pred is None:
-        return None, 0.0, None
-    
-    # Both models have predictions - use the one with higher confidence
-    # Give slight preference to skeleton model as it's more reliable for hand gestures
-    skeleton_weight = 1.1  # 10% boost for skeleton model
-    
-    weighted_skeleton_conf = skeleton_conf * skeleton_weight
-    
-    if weighted_skeleton_conf >= keras_conf:
-        return skeleton_pred, skeleton_conf, "ISL-Skeleton"
-    else:
-        return keras_pred, keras_conf, "ISL-Keras"
+    # Only use Keras model for predictions
+    if keras_pred is not None:
+        return keras_pred, keras_conf, "Keras"
+    return None, 0.0, None
 
 
 # ----------------------------------------------------
@@ -343,15 +496,83 @@ def generate_frames():
     frame_count = 0
 
     # ----------------------------------------------------
+    #   PREDICTION STABILITY CONFIGURATION
+    # ----------------------------------------------------
+    # Use global configuration values
+    STABILITY_DURATION = PREDICTION_STABILITY_DURATION
+    MIN_CONFIDENCE_THRESHOLD = PREDICTION_MIN_CONFIDENCE
+    BUFFER_SIZE = PREDICTION_BUFFER_SIZE
+    
+    # ----------------------------------------------------
+    #   WORD PREDICTION MODE
+    # ----------------------------------------------------
+    # Word accumulation for word prediction mode
+    current_word = []  # List of characters in current word: [(char, confidence, timestamp), ...]
+    last_character_time = None  # Timestamp of last character addition
+    
+    # Prediction stability tracking
+    prediction_buffer = []  # Store recent predictions: [(character, confidence, timestamp), ...]
+    last_emitted_prediction = None
+    last_emitted_time = 0
+    stable_prediction_start_time = None
+    stable_prediction_character = None
+    stable_prediction_confidence = 0.0
+
+    # ----------------------------------------------------
     #   FRAME LOOP
     # ----------------------------------------------------
+    consecutive_failures = 0
+    max_failures = 10
+    reopen_attempts = 0
+    max_reopen_attempts = 3  # Limit how many times we try to reopen
+    
     while True:
         try:
+            data_aux, x_, y_ = [], [], []
+
             ret, frame = cap.read()
 
             if not ret or frame is None:
-                print("⚠ Warning: Could not read frame.")
+                consecutive_failures += 1
+                if consecutive_failures <= max_failures:
+                    # Only print warning occasionally to avoid spam
+                    if consecutive_failures % 5 == 0:
+                        print(f"⚠ Warning: Could not read frame ({consecutive_failures} consecutive failures)")
+                else:
+                    # After many failures, try to reopen camera (but limit attempts)
+                    if reopen_attempts < max_reopen_attempts:
+                        reopen_attempts += 1
+                        print(f"⚠ Multiple frame read failures. Attempting to reopen camera (attempt {reopen_attempts}/{max_reopen_attempts})...")
+                        cap.release()
+                        time.sleep(1.0)  # Longer pause before reopening
+                        new_cap = open_camera()
+                        if new_cap is not None:
+                            cap = new_cap
+                            consecutive_failures = 0
+                            print("✔ Camera reopened successfully")
+                            continue
+                        else:
+                            print(f"⚠ Could not reopen camera (attempt {reopen_attempts}/{max_reopen_attempts})")
+                            # Try to recreate the original cap
+                            cap = open_camera()
+                            if cap is None:
+                                print("❌ Could not reopen camera. Will continue trying to read frames...")
+                                time.sleep(2.0)  # Wait longer before next attempt
+                            else:
+                                consecutive_failures = 0
+                    else:
+                        # After max reopen attempts, just log and continue
+                        if consecutive_failures % 20 == 0:  # Print every 20 failures
+                            print(f"⚠ Camera read failures persist ({consecutive_failures} failures, {reopen_attempts} reopen attempts). Continuing...")
+                        time.sleep(0.1)  # Longer delay when camera is persistently unavailable
+                
+                # Small delay to avoid busy-waiting
+                time.sleep(0.01)
                 continue
+
+            # Reset failure counter on successful read
+            consecutive_failures = 0
+            reopen_attempts = 0  # Reset reopen attempts on successful read
 
             frame = cv2.flip(frame, 1)
             H, W, _ = frame.shape
@@ -359,34 +580,46 @@ def generate_frames():
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = hands.process(frame_rgb)
 
-            # Track all predictions for this frame
-            all_predictions = []
+            predicted_character = None
+            confidence = 0.0
+            model_used = None
+
+            # Reset stability if no hands detected
+            if not results.multi_hand_landmarks:
+                stable_prediction_character = None
+                stable_prediction_start_time = None
+                stable_prediction_confidence = 0.0
+                
+                # In word mode, check if pause is long enough to complete word
+                if WORD_MODE_ENABLED and current_word and last_character_time:
+                    current_time = time.time()
+                    pause_duration = current_time - last_character_time
+                    if pause_duration >= WORD_PAUSE_DURATION:
+                        # Complete and emit the accumulated word
+                        word_text = ''.join([char for char, _, _ in current_word])
+                        word_confidence = sum([conf for _, conf, _ in current_word]) / len(current_word)
+                        
+                        socketio.emit(
+                            'prediction',
+                            {
+                                'text': word_text.strip(),
+                                'confidence': float(word_confidence),
+                                'model': "Keras",
+                                'is_word': True
+                            }
+                        )
+                        
+                        # Reset word accumulation
+                        current_word = []
+                        last_character_time = None
             
             if results.multi_hand_landmarks:
-                num_hands_detected = len(results.multi_hand_landmarks)
-                if num_hands_detected > 1:
-                    print(f"✓ Detected {num_hands_detected} hands in frame")
+                # Collect landmarks from all hands
+                all_landmark_lists = []
+                all_x_coords = []
+                all_y_coords = []
                 
-                # Get hand labels (Left/Right) if available
-                hand_labels = []
-                if results.multi_handedness:
-                    for hand_info in results.multi_handedness:
-                        hand_labels.append(hand_info.classification[0].label)
-                else:
-                    # If hand labels not available, assign based on position
-                    hand_labels = ['Hand'] * len(results.multi_hand_landmarks)
-
-                # Collect features from ALL hands first (for two-hand model)
-                skeleton_features_list = []
-                keras_features_list = []
-                hand_bboxes = []
-                
-                for hand_idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
-                    # Initialize data structures for THIS hand only
-                    data_aux = []
-                    x_ = []
-                    y_ = []
-
+                for hand_landmarks in results.multi_hand_landmarks:
                     # Draw landmarks on frame
                     mp_drawing.draw_landmarks(
                         frame,
@@ -396,130 +629,173 @@ def generate_frames():
                         mp_drawing_styles.get_default_hand_connections_style()
                     )
 
-                    # --------------------------
-                    #  SKELETON MODEL FEATURES
-                    # --------------------------
-                    # Extract x and y coordinates for this hand
+                    # Collect coordinates for bbox
                     for lm in hand_landmarks.landmark:
-                        x_.append(lm.x)
-                        y_.append(lm.y)
-
-                    # Normalize coordinates relative to this hand's bounding box
-                    if len(x_) > 0 and len(y_) > 0:
-                        min_x = min(x_)
-                        min_y = min(y_)
-                        for lm in hand_landmarks.landmark:
-                            data_aux.append(lm.x - min_x)
-                            data_aux.append(lm.y - min_y)
-                        
-                        skeleton_features_list.append(data_aux)
-
-                    # --------------------------
-                    #  BBOX FOR VISUALIZATION
-                    # --------------------------
-                    if len(x_) > 0 and len(y_) > 0:
-                        x1 = int(min(x_) * W) - 10
-                        y1 = int(min(y_) * H) - 10
-                        x2 = int(max(x_) * W) + 10
-                        y2 = int(max(y_) * H) + 10
-
-                        # Ensure bbox is within frame bounds
-                        x1 = max(0, x1)
-                        y1 = max(0, y1)
-                        x2 = min(W, x2)
-                        y2 = min(H, y2)
-                        
-                        hand_bboxes.append((x1, y1, x2, y2))
-
-                        # --------------------------
-                        #  KERAS LANDMARK FEATURES
-                        # --------------------------
-                        landmark_list = calc_landmark_list(frame, hand_landmarks)
-                        pre_processed_landmarks = pre_process_landmark(landmark_list)
-                        keras_features_list.append(pre_processed_landmarks)
-
-                # Combine features for two-hand model (pad with zeros if only one hand)
-                def combine_two_hands(per_hand_list):
-                    """Combine features from multiple hands, padding with zeros if only one hand."""
-                    if not per_hand_list:
-                        return None
-                    if len(per_hand_list) == 1:
-                        # Pad with zeros to make 84 features (42 per hand)
-                        return per_hand_list[0] + [0.0] * len(per_hand_list[0])
-                    elif len(per_hand_list) >= 2:
-                        # Combine first two hands
-                        return per_hand_list[0] + per_hand_list[1]
-                    return per_hand_list[0]
-
-                combined_skeleton_features = combine_two_hands(skeleton_features_list)
-                combined_keras_features = combine_two_hands(keras_features_list)
-
-                # -------------------------------------
-                #  GET PREDICTIONS FROM BOTH MODELS (using combined features)
-                # -------------------------------------
-                if combined_skeleton_features and combined_keras_features:
-                    skeleton_pred, skeleton_conf = predict_with_skeleton_model(combined_skeleton_features)
-                    keras_pred, keras_conf = predict_with_keras_landmark_model(combined_keras_features)
-
-                    # Combine predictions (ensemble)
-                    predicted_character, confidence, model_used = get_combined_prediction(
-                        skeleton_pred, skeleton_conf, keras_pred, keras_conf
-                    )
-
-                    # Store prediction (combined for all hands)
-                    if predicted_character is not None:
-                        all_predictions.append({
-                            'character': predicted_character,
-                            'confidence': confidence,
-                            'model': model_used,
-                            'hand_label': 'Combined' if num_hands_detected > 1 else hand_labels[0] if hand_labels else 'Hand',
-                            'bbox': hand_bboxes[0] if hand_bboxes else (0, 0, 0, 0)
-                        })
-                        if num_hands_detected > 1:
-                            print(f"  Combined prediction from {num_hands_detected} hands: {predicted_character} (conf: {confidence:.2f})")
+                        all_x_coords.append(lm.x)
+                        all_y_coords.append(lm.y)
                     
-                    # Draw bounding boxes and predictions for each hand
-                    for hand_idx, (x1, y1, x2, y2) in enumerate(hand_bboxes):
-                        # Use different colors for left/right hands
-                        if hand_idx == 0:
-                            color = (0, 255, 0) if confidence > 0.7 else (0, 165, 255) if confidence > 0.5 else (0, 0, 255)
-                        else:
-                            color = (255, 0, 0) if confidence > 0.7 else (255, 165, 0) if confidence > 0.5 else (255, 0, 255)
-                        
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
-                        
-                        # Label with hand identifier if multiple hands
-                        if predicted_character is not None:
-                            label_text = f"{predicted_character} ({confidence*100:.1f}%)"
-                            if num_hands_detected > 1:
-                                hand_label = hand_labels[hand_idx] if hand_idx < len(hand_labels) else f'Hand {hand_idx + 1}'
-                                label_text = f"[{hand_label}] {label_text}"
+                    # Process landmarks for this hand
+                    landmark_list = calc_landmark_list(frame, hand_landmarks)
+                    pre_processed = pre_process_landmark(landmark_list)
+                    all_landmark_lists.append(pre_processed)
+
+                # --------------------------
+                #  BBOX FOR VISUALIZATION
+                # --------------------------
+                if all_x_coords and all_y_coords:
+                    x1 = int(min(all_x_coords) * W) - 10
+                    y1 = int(min(all_y_coords) * H) - 10
+                    x2 = int(max(all_x_coords) * W) + 10
+                    y2 = int(max(all_y_coords) * H) + 10
+
+                    # --------------------------
+                    #  COMBINE LANDMARKS FOR PREDICTION (model expects 84 features)
+                    # --------------------------
+                    # If single hand: pad with zeros to 84 features
+                    # If two hands: concatenate both (42 + 42 = 84)
+                    if len(all_landmark_lists) == 1:
+                        # Single hand: pad with zeros
+                        combined_landmarks = all_landmark_lists[0] + [0.0] * len(all_landmark_lists[0])
+                    elif len(all_landmark_lists) >= 2:
+                        # Two hands: concatenate first two hands
+                        combined_landmarks = all_landmark_lists[0] + all_landmark_lists[1]
+                    else:
+                        combined_landmarks = None
+
+                    # -------------------------------------
+                    #  GET PREDICTION FROM KERAS MODEL ONLY
+                    # -------------------------------------
+                    if combined_landmarks is not None:
+                        predicted_character, confidence = predict_with_keras_landmark_model(combined_landmarks)
+                        model_used = "Keras"
+                        current_time = time.time()
+
+                        # Stability check: only emit if prediction is stable
+                        if predicted_character is not None and confidence >= MIN_CONFIDENCE_THRESHOLD:
+                            # Add to prediction buffer
+                            prediction_buffer.append((predicted_character, confidence, current_time))
                             
+                            # Keep buffer size manageable
+                            if len(prediction_buffer) > BUFFER_SIZE:
+                                prediction_buffer.pop(0)
+                            
+                            # Remove old predictions (older than stability duration)
+                            prediction_buffer = [(char, conf, ts) for char, conf, ts in prediction_buffer 
+                                               if current_time - ts <= STABILITY_DURATION + 0.5]
+                            
+                            # Check if current prediction matches stable prediction
+                            if stable_prediction_character == predicted_character:
+                                # Same prediction continues - check if stable long enough
+                                if stable_prediction_start_time is not None:
+                                    stability_duration = current_time - stable_prediction_start_time
+                                    if stability_duration >= STABILITY_DURATION:
+                                        # Prediction is stable - emit it (but only once per stable period)
+                                        if (last_emitted_prediction != predicted_character or 
+                                            current_time - last_emitted_time >= STABILITY_DURATION):
+                                            
+                                            if WORD_MODE_ENABLED:
+                                                # WORD MODE: Accumulate characters into words
+                                                # Only add if this is a new character (different from last) or enough time has passed
+                                                should_add_char = False
+                                                
+                                                if not current_word:
+                                                    # First character - always add
+                                                    should_add_char = True
+                                                elif current_word[-1][0] != predicted_character:
+                                                    # Different character - add it
+                                                    should_add_char = True
+                                                elif (current_time - current_word[-1][2]) >= STABILITY_DURATION * 2:
+                                                    # Same character but enough time passed (allows repeated chars like "LL" in "HELLO")
+                                                    should_add_char = True
+                                                
+                                                if should_add_char:
+                                                    # Add character to current word
+                                                    current_word.append((predicted_character, stable_prediction_confidence, current_time))
+                                                    last_character_time = current_time
+                                                    
+                                                    # Check if word should be completed
+                                                    should_complete_word = False
+                                                    
+                                                    # Check if character is a space or punctuation (word boundary)
+                                                    if predicted_character in [' ', '.', ',', '!', '?', ';', ':']:
+                                                        should_complete_word = True
+                                                    
+                                                    # Check max word length
+                                                    if len(current_word) >= MAX_WORD_LENGTH:
+                                                        should_complete_word = True
+                                                    
+                                                    # Complete and emit word if needed
+                                                    if should_complete_word and current_word:
+                                                        # Build word from accumulated characters
+                                                        word_text = ''.join([char for char, _, _ in current_word])
+                                                        word_confidence = sum([conf for _, conf, _ in current_word]) / len(current_word)
+                                                        
+                                                        # Emit complete word
+                                                        socketio.emit(
+                                                            'prediction',
+                                                            {
+                                                                'text': word_text.strip(),
+                                                                'confidence': float(word_confidence),
+                                                                'model': model_used,
+                                                                'is_word': True
+                                                            }
+                                                        )
+                                                        
+                                                        # Reset word accumulation
+                                                        current_word = []
+                                                        last_character_time = None
+                                            else:
+                                                # CHARACTER MODE: Emit individual characters
+                                                socketio.emit(
+                                                    'prediction',
+                                                    {
+                                                        'text': predicted_character, 
+                                                        'confidence': float(stable_prediction_confidence),
+                                                        'model': model_used,
+                                                        'is_word': False
+                                                    }
+                                                )
+                                            
+                                            last_emitted_prediction = predicted_character
+                                            last_emitted_time = current_time
+                            else:
+                                # New prediction detected - reset stability tracking
+                                stable_prediction_character = predicted_character
+                                stable_prediction_confidence = confidence
+                                stable_prediction_start_time = current_time
+                            
+                            # Draw bounding box and prediction (always show current prediction on video)
+                            # Show stability status and word mode status
+                            stability_status = ""
+                            if stable_prediction_start_time is not None:
+                                elapsed = current_time - stable_prediction_start_time
+                                if elapsed >= STABILITY_DURATION:
+                                    stability_status = " [STABLE]"
+                                else:
+                                    stability_status = f" [{(elapsed/STABILITY_DURATION)*100:.0f}%]"
+                            
+                            # Show word mode status
+                            word_status = ""
+                            if WORD_MODE_ENABLED and current_word:
+                                word_preview = ''.join([char for char, _, _ in current_word])
+                                word_status = f" | Word: {word_preview}"
+                            
+                            color = (0, 255, 0) if confidence > 0.7 else (0, 165, 255) if confidence > 0.5 else (0, 0, 255)
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
                             cv2.putText(
                                 frame,
-                                label_text,
+                                f"{predicted_character} ({confidence*100:.1f}%){stability_status}{word_status}",
                                 (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX,
-                                0.7,
+                                1.1,
                                 color,
-                                2
+                                3
                             )
-
-            # Send predictions via WebSocket
-            # Since we combine features from all hands, we have one prediction
-            if all_predictions and len(all_predictions) > 0:
-                single_prediction = all_predictions[0]
-                # Get num_hands_detected from the frame processing
-                hands_count = len(results.multi_hand_landmarks) if results.multi_hand_landmarks else 0
-                socketio.emit(
-                    'prediction',
-                    {
-                        'text': single_prediction['character'], 
-                        'confidence': float(single_prediction['confidence']),
-                        'model': single_prediction['model'],
-                        'num_hands': hands_count
-                    }
-                )
+                        else:
+                            # No valid prediction or low confidence - reset stability
+                            stable_prediction_character = None
+                            stable_prediction_start_time = None
+                            stable_prediction_confidence = 0.0
 
             # Encode frame
             ret, buffer = cv2.imencode('.jpg', frame)
@@ -554,8 +830,8 @@ if __name__ == '__main__':
     print("\n" + "="*50)
     print("   SignSpeak - Sign Language Detection")
     print("="*50)
-    print(f"ISL Skeleton Model: {'✔ Loaded' if skeleton_model else '❌ Not Available'}")
-    print(f"ISL Keras Landmark Model: {'✔ Loaded' if keras_model else '❌ Not Available'}")
+    print(f"Skeleton Model: {'✔ Loaded' if skeleton_model else '❌ Not Available'}")
+    print(f"Keras Landmark Model: {'✔ Loaded' if keras_model else '❌ Not Available'}")
     print(f"TensorFlow/Keras: {'✔ Available' if TENSORFLOW_AVAILABLE else '❌ Not Installed'}")
     print("="*50 + "\n")
     

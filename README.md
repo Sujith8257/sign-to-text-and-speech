@@ -33,10 +33,18 @@ The system recognizes **35 Indian Sign Language classes** covering digits (1-9) 
 
 ## ✨ Features
 
+### Authentication System
+- **User Registration**: Sign up with username, password, and optional email
+- **Secure Login**: Session-based authentication with password hashing (SHA256)
+- **User Management**: CSV-based database for user storage (`database.csv`)
+- **Protected Routes**: Main application requires authentication
+- **Session Management**: Secure session handling with Flask
+
 ### ISL Model Support
 - **ISL Landmark Model**: Keras neural network using MediaPipe hand landmarks (35 classes: digits 1-9 + letters A-Z)
-- **ISL Skeleton Model**: RandomForest classifier using normalized landmark features (35 classes)
+- **ISL Skeleton Model**: RandomForest classifier using normalized landmark features (35 classes) - used for skeleton detection only
 - **Two-Hand Support**: Recognizes gestures from both single hand and two hands simultaneously
+- **Primary Prediction Model**: Uses `indian_sign_model.h5` (Keras model) for all predictions
 
 ### Real-Time Recognition
 - Live webcam feed processing
@@ -45,17 +53,20 @@ The system recognizes **35 Indian Sign Language classes** covering digits (1-9) 
 - Gesture stability detection to reduce false positives
 
 ### User Interface
-- Modern web-based interface
+- Modern web-based interface with authentication
+- Sign up and sign in pages
 - Real-time video streaming (MJPEG)
 - Live prediction display
 - Two-hand detection visualization
 - Confidence score visualization
+- User profile display and logout functionality
 
 ### Technical Features
 - GPU acceleration support (CUDA)
 - Multi-backend camera support (DirectShow, MSMF, V4L2)
 - Robust error handling and camera reconnection
 - Cross-platform compatibility (Windows, Linux, macOS)
+- Docker containerization support
 
 ## 🏗️ Architecture
 
@@ -208,14 +219,18 @@ Frontend Display
 
 ## 📦 Installation
 
-#### Step 1: Clone the Repository
+### Step 1: Clone the Repository
 
 ```bash
 git clone https://github.com/Sujith8257/sign-to-text-and-speech.git
 cd sign-to-text-and-speech
 ```
 
-### Step 2: Create Virtual Environment
+### Step 2: Choose Installation Method
+
+#### Option A: Local Installation (Recommended for Development)
+
+**Create Virtual Environment:**
 
 **Windows:**
 ```bash
@@ -229,17 +244,34 @@ python3 -m venv venv
 source venv/bin/activate
 ```
 
-### Step 3: Install Dependencies
-
+**Install Dependencies:**
 ```bash
 pip install -r requirements.txt
 ```
 
-### Step 4: Verify Installation
-
+**Verify Installation:**
 ```bash
 python -c "import cv2, mediapipe, flask, tensorflow; print('All dependencies installed successfully!')"
 ```
+
+#### Option B: Docker Installation (Recommended for Production)
+
+**Prerequisites:**
+- Docker Desktop installed
+- Docker Compose installed
+
+**Build and Run:**
+```bash
+docker-compose up -d --build
+```
+
+**Check Status:**
+```bash
+docker-compose ps
+docker-compose logs -f
+```
+
+**Note:** The database CSV file will be automatically created on first user registration.
 
 ## 📊 Dataset
 
@@ -336,6 +368,8 @@ The dataset visualization image (shown at the top of this README) displays a gri
 
 ### Starting the Application
 
+#### Option 1: Local Development (Without Docker)
+
 1. **Activate virtual environment** (if not already active):
    ```bash
    # Windows
@@ -355,21 +389,61 @@ The dataset visualization image (shown at the top of this README) displays a gri
    http://localhost:5000
    ```
 
+#### Option 2: Docker Deployment
+
+1. **Build and run with Docker Compose**:
+   ```bash
+   docker-compose up -d --build
+   ```
+
+2. **View logs**:
+   ```bash
+   docker-compose logs -f
+   ```
+
+3. **Stop the container**:
+   ```bash
+   docker-compose down
+   ```
+
+4. **Access the application**:
+   ```
+   http://localhost:5000
+   ```
+
+### Authentication
+
+1. **First Time Users**:
+   - Navigate to `http://localhost:5000/signup`
+   - Create an account with username, password, and optional email
+   - You will be redirected to the sign in page
+
+2. **Existing Users**:
+   - Navigate to `http://localhost:5000/signin`
+   - Enter your username and password
+   - You will be redirected to the main application
+
+3. **Logout**:
+   - Click the "Logout" button in the header
+   - You will be redirected to the sign in page
+
 ### Using the Web Interface
 
-1. **Allow camera access** when prompted by the browser
-2. **Position your hand** in front of the camera
-3. **Make sign language gestures** - predictions will appear in real-time
-4. **Switch models** using the model selector (if both models are available)
+1. **Sign in** to access the main application
+2. **Allow camera access** when prompted by the browser
+3. **Position your hand** in front of the camera
+4. **Make sign language gestures** - predictions will appear in real-time
 5. **View confidence scores** displayed with each prediction
+6. **Logout** when finished using the application
 
 ### Model Usage
 
-The system uses an ensemble approach:
-- Both ISL Keras and ISL Skeleton models run predictions simultaneously
-- The prediction with higher confidence is selected
-- If both models agree, confidence is boosted
+The system uses the ISL Keras Landmark Model for predictions:
+- **Primary Model**: `indian_sign_model.h5` (Keras model) - used for all predictions
+- **Skeleton Model**: `model.p` - used for skeleton detection/visualization only
 - Supports both single-hand and two-hand gestures
+- Single hand: 42 features padded to 84 features
+- Two hands: 42 + 42 = 84 features
 
 ### Command Line Options
 
@@ -384,7 +458,7 @@ Currently, the application runs with default settings. Future versions may inclu
 ```
 sign-to-text-and-speech/
 │
-├── app.py                          # Main Flask application
+├── app.py                          # Main Flask application with authentication
 ├── train_indian_model.py           # ISL CNN training script
 ├── inference_indian.py             # Standalone inference script
 ├── generate_dataset_visualization.py # Dataset visualization generator
@@ -392,10 +466,13 @@ sign-to-text-and-speech/
 ├── requirements.txt                # Python dependencies
 ├── requirements_training.txt       # Additional training dependencies
 │
+├── database.csv                    # User authentication database (CSV format)
+│   └── Stores: username, password_hash, email
+│
 ├── model/                          # Model files directory
-│   ├── indian_sign_model.h5       # ISL Keras landmark model
-│   ├── model.p                    # ISL Skeleton RandomForest model
-│   └── model_metadata.json       # Model metadata
+│   ├── indian_sign_model.h5       # ISL Keras landmark model (primary)
+│   ├── model.p                    # ISL Skeleton RandomForest model (visualization)
+│   └── model_metadata.json        # Model metadata
 │
 ├── checkpoints/                    # Training checkpoints
 │   ├── best_model_*.h5            # Best model checkpoints
@@ -409,8 +486,13 @@ sign-to-text-and-speech/
 │   ├── B/
 │   └── ... (35 classes total)
 │
-├── templates/                     # Web templates
-│   └── index.html                 # Main web interface
+├── templates/                      # Web templates
+│   ├── index.html                 # Main web interface (protected)
+│   ├── signin.html                # Sign in page
+│   └── signup.html                # Sign up page
+│
+├── Dockerfile                      # Docker container configuration
+├── docker-compose.yml              # Docker Compose configuration
 │
 ├── dataset_classes_visualization.png  # Dataset visualization
 │
@@ -438,13 +520,39 @@ sign-to-text-and-speech/
 ### HTTP Endpoints
 
 **`GET /`**
-- **Purpose**: Serve main web interface
+- **Purpose**: Serve main web interface (protected - requires authentication)
 - **Response**: HTML page
+- **Authentication**: Required (redirects to `/signin` if not logged in)
+
+**`GET /signup`**
+- **Purpose**: User registration page
+- **Response**: HTML sign up form
+- **Methods**: GET (display form), POST (process registration)
+
+**`POST /signup`**
+- **Purpose**: Register new user
+- **Request Body**: `username`, `password`, `email` (optional)
+- **Response**: Redirects to `/signin` on success, or shows error message
+
+**`GET /signin`**
+- **Purpose**: User login page
+- **Response**: HTML sign in form
+- **Methods**: GET (display form), POST (process login)
+
+**`POST /signin`**
+- **Purpose**: Authenticate user
+- **Request Body**: `username`, `password`
+- **Response**: Redirects to `/` on success, or shows error message
+
+**`GET /logout`**
+- **Purpose**: Logout and clear session
+- **Response**: Redirects to `/signin`
 
 **`GET /video_feed`**
 - **Purpose**: MJPEG video stream
 - **Response**: Multipart MJPEG stream
 - **Content-Type**: `multipart/x-mixed-replace; boundary=frame`
+- **Authentication**: Required (session-based)
 
 **`GET /api/status`**
 - **Purpose**: Get model status
@@ -456,6 +564,7 @@ sign-to-text-and-speech/
     "tensorflow": true | false
   }
   ```
+- **Authentication**: Not required (public endpoint)
 
 ## 🎓 Training
 
@@ -558,25 +667,55 @@ sign-to-text-and-speech/
 
 ## 🔧 Troubleshooting
 
+### Authentication Issues
+
+**Problem**: Cannot sign up - "Username already exists"
+- **Solution**: Choose a different username or sign in with existing account
+
+**Problem**: Cannot sign in - "Username not found" or "Incorrect password"
+- **Solution**: Verify username and password are correct
+- **Check**: Ensure `database.csv` file exists and is readable
+
+**Problem**: Redirected to sign in page repeatedly
+- **Solution**: Clear browser cookies/session data
+- **Check**: Flask secret key is set correctly in `app.py`
+
+**Problem**: Database CSV not found
+- **Solution**: The file is automatically created on first signup
+- **Check**: Ensure the application has write permissions in the project directory
+
 ### Camera Issues
 
 **Problem**: Camera not detected
 - **Solution**: Check camera permissions in browser/system settings
 - **Alternative**: Try different camera index in code (0, 1, 2)
+- **Docker**: Ensure camera device is mounted in `docker-compose.yml`
 
 **Problem**: Camera opens but no frames
 - **Solution**: Try different backend (DirectShow, MSMF, V4L2)
 - **Check**: Camera is not being used by another application
+- **Docker**: Uncomment device mounting in `docker-compose.yml`:
+  ```yaml
+  devices:
+    - /dev/video0:/dev/video0
+  ```
 
 ### Model Loading Issues
 
 **Problem**: Model file not found
-- **Solution**: Ensure model files exist in project directory
-- **Check**: File paths in `app.py` are correct
+- **Solution**: Ensure model files exist in `model/` directory
+- **Check**: File paths in `app.py` are correct:
+  - `model/indian_sign_model.h5` (primary prediction model)
+  - `model/model.p` (skeleton detection model)
 
 **Problem**: TensorFlow/Keras errors
 - **Solution**: Reinstall TensorFlow: `pip install --upgrade tensorflow`
 - **Check**: Python version compatibility (3.8+)
+- **Docker**: Rebuild the container: `docker-compose up -d --build`
+
+**Problem**: "Unrecognized keyword arguments passed to DepthwiseConv2D: {'groups': 1}"
+- **Solution**: This is handled automatically with compatibility fix
+- **Check**: Model was saved with compatible TensorFlow version
 
 ### Performance Issues
 
@@ -588,15 +727,31 @@ sign-to-text-and-speech/
 - **Solution**: Reduce batch size or use GPU
 - **Check**: Close other applications using CPU
 
+### Docker Issues
+
+**Problem**: Container won't start
+- **Solution**: Check Docker logs: `docker-compose logs`
+- **Check**: Ensure ports 5000 is not in use by another application
+
+**Problem**: Changes not reflecting in container
+- **Solution**: Rebuild container: `docker-compose up -d --build`
+- **Note**: `app.py` and templates are mounted as volumes and update automatically
+
+**Problem**: Database CSV not persisting
+- **Solution**: Ensure volume mount is configured in `docker-compose.yml`
+- **Check**: File permissions in the project directory
+
 ### Web Interface Issues
 
 **Problem**: Video stream not loading
 - **Solution**: Check browser console for errors
 - **Check**: Flask server is running and accessible
+- **Check**: You are signed in (authentication required)
 
 **Problem**: Predictions not updating
 - **Solution**: Check WebSocket connection in browser console
 - **Check**: Model is loaded correctly (check server logs)
+- **Check**: Camera is working and detecting hands
 
 ## 🤝 Contributing
 
@@ -640,9 +795,23 @@ For questions, issues, or contributions, please open an issue on GitHub.
 
 ## 📝 Recent Updates
 
+- **Authentication System** - Added user sign up, sign in, and session management
+- **CSV Database** - User credentials stored in `database.csv` with password hashing
+- **Protected Routes** - Main application requires authentication
+- **Docker Support** - Full Docker containerization with docker-compose
+- **Model Optimization** - Primary prediction uses Keras model only (`indian_sign_model.h5`)
+- **Improved Error Handling** - Better camera reconnection and frame reading error handling
 - **Removed ASL support** - Focused exclusively on Indian Sign Language (ISL)
 - **New landmark-based model** - Replaced CNN with efficient landmark-based neural network
 - **Two-hand support** - Full support for detecting and recognizing two-hand gestures
 - **Improved accuracy** - Achieved 99.88% test accuracy with the new model
 - **Model organization** - Models now organized in `model/` folder
 - **Checkpoint system** - Enhanced checkpointing with weight averaging support
+
+## 🔐 Security Notes
+
+- **Password Storage**: Passwords are hashed using SHA256 before storage
+- **Session Management**: Flask sessions are used for authentication
+- **CSV Database**: Simple CSV storage for development. For production, consider migrating to a proper database (SQLite, PostgreSQL, etc.)
+- **HTTPS**: For production deployment, use HTTPS to secure authentication
+- **Secret Key**: Change the Flask `SECRET_KEY` in `app.py` for production use
