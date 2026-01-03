@@ -141,13 +141,6 @@ PREDICTION_MIN_CONFIDENCE = 0.6  # minimum confidence threshold (0.0 to 1.0)
 PREDICTION_BUFFER_SIZE = 30  # number of recent predictions to track for stability
 
 # -----------------------------
-#   WORD PREDICTION MODE CONFIGURATION
-# -----------------------------
-WORD_MODE_ENABLED = True  # Enable word prediction mode (accumulates characters into words)
-WORD_PAUSE_DURATION = 1.5  # seconds - pause duration to complete a word
-MAX_WORD_LENGTH = 20  # maximum characters in a word before forcing completion
-
-# -----------------------------
 #   LOAD SKELETON MODEL (model.p) - For skeleton detection only, not used for predictions
 # -----------------------------
 skeleton_model = None
@@ -290,22 +283,7 @@ def get_status():
     return jsonify({
         'skeleton_model': skeleton_model is not None,
         'keras_model': keras_model is not None,
-        'tensorflow': TENSORFLOW_AVAILABLE,
-        'word_mode': WORD_MODE_ENABLED
-    })
-
-
-@app.route('/api/toggle-word-mode', methods=['POST'])
-@login_required
-def toggle_word_mode():
-    """Toggle word prediction mode on/off."""
-    global WORD_MODE_ENABLED
-    data = request.get_json()
-    if 'enabled' in data:
-        WORD_MODE_ENABLED = bool(data['enabled'])
-    return jsonify({
-        'word_mode': WORD_MODE_ENABLED,
-        'message': 'Word mode ' + ('enabled' if WORD_MODE_ENABLED else 'disabled')
+        'tensorflow': TENSORFLOW_AVAILABLE
     })
 
 
@@ -503,13 +481,6 @@ def generate_frames():
     MIN_CONFIDENCE_THRESHOLD = PREDICTION_MIN_CONFIDENCE
     BUFFER_SIZE = PREDICTION_BUFFER_SIZE
     
-    # ----------------------------------------------------
-    #   WORD PREDICTION MODE
-    # ----------------------------------------------------
-    # Word accumulation for word prediction mode
-    current_word = []  # List of characters in current word: [(char, confidence, timestamp), ...]
-    last_character_time = None  # Timestamp of last character addition
-    
     # Prediction stability tracking
     prediction_buffer = []  # Store recent predictions: [(character, confidence, timestamp), ...]
     last_emitted_prediction = None
@@ -589,29 +560,6 @@ def generate_frames():
                 stable_prediction_character = None
                 stable_prediction_start_time = None
                 stable_prediction_confidence = 0.0
-                
-                # In word mode, check if pause is long enough to complete word
-                if WORD_MODE_ENABLED and current_word and last_character_time:
-                    current_time = time.time()
-                    pause_duration = current_time - last_character_time
-                    if pause_duration >= WORD_PAUSE_DURATION:
-                        # Complete and emit the accumulated word
-                        word_text = ''.join([char for char, _, _ in current_word])
-                        word_confidence = sum([conf for _, conf, _ in current_word]) / len(current_word)
-                        
-                        socketio.emit(
-                            'prediction',
-                            {
-                                'text': word_text.strip(),
-                                'confidence': float(word_confidence),
-                                'model': "Keras",
-                                'is_word': True
-                            }
-                        )
-                        
-                        # Reset word accumulation
-                        current_word = []
-                        last_character_time = None
             
             if results.multi_hand_landmarks:
                 # Collect landmarks from all hands
@@ -692,70 +640,14 @@ def generate_frames():
                                         # Prediction is stable - emit it (but only once per stable period)
                                         if (last_emitted_prediction != predicted_character or 
                                             current_time - last_emitted_time >= STABILITY_DURATION):
-                                            
-                                            if WORD_MODE_ENABLED:
-                                                # WORD MODE: Accumulate characters into words
-                                                # Only add if this is a new character (different from last) or enough time has passed
-                                                should_add_char = False
-                                                
-                                                if not current_word:
-                                                    # First character - always add
-                                                    should_add_char = True
-                                                elif current_word[-1][0] != predicted_character:
-                                                    # Different character - add it
-                                                    should_add_char = True
-                                                elif (current_time - current_word[-1][2]) >= STABILITY_DURATION * 2:
-                                                    # Same character but enough time passed (allows repeated chars like "LL" in "HELLO")
-                                                    should_add_char = True
-                                                
-                                                if should_add_char:
-                                                    # Add character to current word
-                                                    current_word.append((predicted_character, stable_prediction_confidence, current_time))
-                                                    last_character_time = current_time
-                                                    
-                                                    # Check if word should be completed
-                                                    should_complete_word = False
-                                                    
-                                                    # Check if character is a space or punctuation (word boundary)
-                                                    if predicted_character in [' ', '.', ',', '!', '?', ';', ':']:
-                                                        should_complete_word = True
-                                                    
-                                                    # Check max word length
-                                                    if len(current_word) >= MAX_WORD_LENGTH:
-                                                        should_complete_word = True
-                                                    
-                                                    # Complete and emit word if needed
-                                                    if should_complete_word and current_word:
-                                                        # Build word from accumulated characters
-                                                        word_text = ''.join([char for char, _, _ in current_word])
-                                                        word_confidence = sum([conf for _, conf, _ in current_word]) / len(current_word)
-                                                        
-                                                        # Emit complete word
-                                                        socketio.emit(
-                                                            'prediction',
-                                                            {
-                                                                'text': word_text.strip(),
-                                                                'confidence': float(word_confidence),
-                                                                'model': model_used,
-                                                                'is_word': True
-                                                            }
-                                                        )
-                                                        
-                                                        # Reset word accumulation
-                                                        current_word = []
-                                                        last_character_time = None
-                                            else:
-                                                # CHARACTER MODE: Emit individual characters
-                                                socketio.emit(
-                                                    'prediction',
-                                                    {
-                                                        'text': predicted_character, 
-                                                        'confidence': float(stable_prediction_confidence),
-                                                        'model': model_used,
-                                                        'is_word': False
-                                                    }
-                                                )
-                                            
+                                            socketio.emit(
+                                                'prediction',
+                                                {
+                                                    'text': predicted_character, 
+                                                    'confidence': float(stable_prediction_confidence),
+                                                    'model': model_used
+                                                }
+                                            )
                                             last_emitted_prediction = predicted_character
                                             last_emitted_time = current_time
                             else:
@@ -765,7 +657,7 @@ def generate_frames():
                                 stable_prediction_start_time = current_time
                             
                             # Draw bounding box and prediction (always show current prediction on video)
-                            # Show stability status and word mode status
+                            # Show stability status
                             stability_status = ""
                             if stable_prediction_start_time is not None:
                                 elapsed = current_time - stable_prediction_start_time
@@ -774,17 +666,11 @@ def generate_frames():
                                 else:
                                     stability_status = f" [{(elapsed/STABILITY_DURATION)*100:.0f}%]"
                             
-                            # Show word mode status
-                            word_status = ""
-                            if WORD_MODE_ENABLED and current_word:
-                                word_preview = ''.join([char for char, _, _ in current_word])
-                                word_status = f" | Word: {word_preview}"
-                            
                             color = (0, 255, 0) if confidence > 0.7 else (0, 165, 255) if confidence > 0.5 else (0, 0, 255)
                             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
                             cv2.putText(
                                 frame,
-                                f"{predicted_character} ({confidence*100:.1f}%){stability_status}{word_status}",
+                                f"{predicted_character} ({confidence*100:.1f}%){stability_status}",
                                 (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX,
                                 1.1,
